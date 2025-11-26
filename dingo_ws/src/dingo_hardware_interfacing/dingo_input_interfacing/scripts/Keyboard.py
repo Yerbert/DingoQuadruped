@@ -11,7 +11,7 @@ KEYBOARD_DEVICE = "/dev/input/event0"
 # Если не знаете точный путь — используйте /dev/input/eventX (например, event3)
 # ИЛИ замените на автоопределение (см. примечание внизу)
 
-class Keyboard:
+class KeyboardEvdev:
     def __init__(self, device_path):
         self.device = InputDevice(device_path)
         self.device.grab()  # Захватываем устройство, чтобы другие не ловили события
