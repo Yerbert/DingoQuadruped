@@ -92,7 +92,7 @@ else:
                 #  2  [front_right_lower, front_left_lower, back_right_lower, back_left_lower]] """
 
 offsets = np.array(
-                    [[75, 90, 110, 65],
+                    [[80, 80, 112, 65],
                     [0, 0, 0, 0],
                     [0, 0, 0, 0]])
 
