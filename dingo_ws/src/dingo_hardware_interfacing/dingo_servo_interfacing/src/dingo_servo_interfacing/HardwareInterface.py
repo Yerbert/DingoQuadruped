@@ -46,8 +46,8 @@ class HardwareInterface():
                 angle_sent_to_servo = (180-angle_from_IK) + 90 degrees to map to this physcial servo location.  """
         self.physical_calibration_offsets = np.array(
                     [[62, 117, 117, 59],
-                    [0, 0, 0, 0],
-                    [0, 0, 0, 0]])
+                    [64, 25, 32, 30],
+                    [17, 15, 9, 0]])
         #applying calibration values to all servos
         self.create()
 
