@@ -22,9 +22,9 @@ class HardwareInterface():
                 #  2  [front_right_lower, front_left_lower, back_right_lower, back_left_lower]] 
 
            'pins' define the physical pin of the servos on the servoboard """
-        self.pins = np.array([[14,10,2,6], 
-                              [13,9,1,5], 
-                              [12,8,0,4]])
+        self.pins = np.array([[6,2,10,14], 
+                              [5,1,9,13], 
+                              [4,0,8,12]])
 
         """ 'servo_multipliers' and 'complementary_angle' both work to flip some angles, x, to (180-x) so that movement on each leg is consistent despite
             physical motor oritentation changes """
@@ -45,9 +45,9 @@ class HardwareInterface():
             - Offsets for LOWER leg servos map allign the servo so that it is vertically down at zero degrees. Note that IK requires a transformation of
                 angle_sent_to_servo = (180-angle_from_IK) + 90 degrees to map to this physcial servo location.  """
         self.physical_calibration_offsets = np.array(
-                    [[62, 117, 117, 59],
-                    [0, -39, 4, 0],
-                    [4, 0, 11, 0]])
+                    [[59, 117, 117, 62],
+                    [0, 4, -39, 0],
+                    [0, 11, 0, 4]])
         #applying calibration values to all servos
         self.create()
 
