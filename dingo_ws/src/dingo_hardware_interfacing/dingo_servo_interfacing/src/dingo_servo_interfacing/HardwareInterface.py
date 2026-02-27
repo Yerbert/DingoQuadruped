@@ -47,7 +47,7 @@ class HardwareInterface():
         self.physical_calibration_offsets = np.array(
                     [[59, 117, 117, 62],
                     [0, 0, 0, 0],
-                    [0, 0, 0, 0]])
+                    [0, 9, 15, 17]])
         #applying calibration values to all servos
         self.create()
 
