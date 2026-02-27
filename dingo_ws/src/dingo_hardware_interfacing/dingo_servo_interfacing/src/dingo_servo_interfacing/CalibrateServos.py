@@ -87,15 +87,15 @@ else:
             #   COLUMN: which leg to control. 0: front-right, 1: front-left, 2: back-right, 3: back-left.
 
                 #               0                  1                2               3
-                #  0 [[front_left*_hip  , front_right*_hip  , back_left*_hip  , back_right*_hip  ]
+                #  0 [[back*_left*_hip  , back*_right*_hip  , front*_left*_hip  , front*_right*_hip  ]
                 #  1  [front_right_upper, front_left_upper, back_right_upper, back_left_upper]
                 #  2  [front_right_lower, front_left_lower, back_right_lower, back_left_lower]]
                 * - invert sides for calibration """
 
 offsets = np.array(
                     [[59, 117, 117, 62],
-                    [0, 0, 0, 0],
-                    [0, 30, 0, 0]])
+                    [30, 32,25 , 64],
+                    [0, 9, 15, 17]])
 
 
 servo_name = ""
