@@ -29,9 +29,9 @@ class HardwareInterface():
         """ 'servo_multipliers' and 'complementary_angle' both work to flip some angles, x, to (180-x) so that movement on each leg is consistent despite
             physical motor oritentation changes """
         self.servo_multipliers = np.array(
-                            [[-1, 1, 1, -1], 
-                            [1, -1, 1, -1], 
-                            [1, -1, 1, -1]])
+                            [[1, -1, -1, 1], 
+                            [-1, 1, -1, 1], 
+                            [-1, 1, -1, 1]])
         self.complementary_angle = np.array(
                             [[180, 0, 0, 180], 
                             [0, 180, 0, 180], 
