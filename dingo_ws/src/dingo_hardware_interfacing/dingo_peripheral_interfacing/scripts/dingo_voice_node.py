@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-
 import os
 import random
-import subprocess
+import pygame
 import rospy
 import rospkg
 from sensor_msgs.msg import Joy
+
 
 # Circle button index on a PS4/PS3 joystick via the ROS joy package
 CIRCLE_BUTTON_INDEX = 1
@@ -29,11 +29,21 @@ class DingoVoiceNode:
             rospy.logwarn("dingo_voice_node: no MP3 files found in %s", sounds_dir)
 
         self._prev_circle = 0
-        self._player_proc = None
+        self._mixer_ready = self._init_mixer_once()
+        
 
         rospy.Subscriber("joy", Joy, self._joy_callback)
+        rospy.on_shutdown(self._shutdown_audio)
         rospy.loginfo("dingo_voice_node: ready, %d sound(s) loaded", len(self.sound_files))
 
+    def _init_mixer_once(self):
+        try:
+            pygame.mixer.init()
+            return True
+        except Exception as e:
+            rospy.logerr("dingo_voice_node: failed to init pygame mixer: %s", e)
+            return False
+        
     def _joy_callback(self, msg):
         if len(msg.buttons) <= CIRCLE_BUTTON_INDEX:
             return
@@ -41,36 +51,45 @@ class DingoVoiceNode:
         circle_pressed = msg.buttons[CIRCLE_BUTTON_INDEX]
 
         # Trigger on rising edge (button just pressed)
-        if circle_pressed == 1 and self._prev_circle == 0:
+        if circle_pressed and self._prev_circle == 0:
             self._play_random_sound()
 
         self._prev_circle = circle_pressed
 
     def _play_random_sound(self):
+        if not self._mixer_ready:
+            rospy.logwarn("dingo_voice_node: pygame mixer not ready, skipping sound.")
+            return
+
         if not self.sound_files:
             rospy.logwarn("dingo_voice_node: no sounds available to play")
             return
 
-        # Stop any currently playing sound before starting a new one
-        if self._player_proc is not None and self._player_proc.poll() is None:
-            self._player_proc.terminate()
-
         sound = random.choice(self.sound_files)
         rospy.loginfo("dingo_voice_node: playing %s", os.path.basename(sound))
 
-        # mpg123 plays MP3 directly through the ALSA/jack audio output
-        self._player_proc = subprocess.Popen(
-            ["mpg123", "-q", sound],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            # Stop any currently playing sound before starting a new one
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+
+            pygame.mixer.music.load(sound)
+            pygame.mixer.music.play()
+        except Exception as e:
+            rospy.logerr("dingo_voice_node: failed to play sound %s: %s", sound, e)
+            
+            
+    def _shutdown_audio(self):
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+                pygame.mixer.quit()
+        except Exception as e:
+            rospy.logwarn("dingo_voice_node: audio shutdown warning: %s", e)
+        
 
     def spin(self):
         rospy.spin()
-
-        # Clean up player process on shutdown
-        if self._player_proc is not None and self._player_proc.poll() is None:
-            self._player_proc.terminate()
 
 
 def main():
