@@ -40,6 +40,7 @@ class DingoVoiceNode:
     def _init_mixer_once(self):
         try:
             pygame.mixer.init()
+            pygame.mixer.music.set_volume(1.0)
             return True
         except Exception as e:
             rospy.logerr("dingo_voice_node: failed to init pygame mixer: %s", e)
