@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # /*****************************************************************************
 # * | File        :	  epdconfig.py
 # * | Author      :   Waveshare team

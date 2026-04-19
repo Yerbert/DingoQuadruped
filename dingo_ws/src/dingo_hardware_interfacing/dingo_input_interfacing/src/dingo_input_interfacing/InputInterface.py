@@ -48,7 +48,7 @@ class InputInterface:
         self.previous_joystick_toggle = joystick_toggle
 
         ####### Handle continuous commands ########
-        x_vel = (msg.axes[1] ) * self.config.max_x_velocity #ly
+        x_vel = (-1*msg.axes[1] ) * self.config.max_x_velocity #ly
         y_vel = msg.axes[0] * self.config.max_y_velocity #lx
         self.developing_command.horizontal_velocity =  np.round(np.array([x_vel, y_vel]),self.rounding_dp)
         self.developing_command.yaw_rate = np.round(msg.axes[3],self.rounding_dp) * self.config.max_yaw_rate #rx
