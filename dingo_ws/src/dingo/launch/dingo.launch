@@ -28,6 +28,10 @@
         <node pkg = "dingo_input_interfacing" type = "Keyboard.py" name = "keyboard_input_listener" output="screen"></node>
     </group>
     
+    <!-- Voice Node -->
+    <node pkg="dingo_peripheral_interfacing" type="dingo_voice_node.py"
+        name="dingo_voice_node" output="screen"/>
+
     <!-- Dingo Driver -->
     <node pkg="dingo" type="dingo_driver.py"
         name="dingo" args="$(arg is_sim) $(arg is_physical) $(arg use_imu)" output="screen"/>
