@@ -1,13 +1,28 @@
-import rospy
+import logging
 import numpy as np
 from dingo_control.State import BehaviorState, State
 from dingo_control.Command import Command
 from dingo_utilities.Utilities import deadband, clipped_first_order_filter
-from sensor_msgs.msg import Joy
+from dingo_input_interfacing.HardwareConfig import JOY_LAYOUTS
+
+logger = logging.getLogger(__name__)
 
 
 class InputInterface:
-    def __init__(self, config):
+    """Turns sensor_msgs/Joy messages into robot Commands.
+
+    It does not subscribe to anything itself: the owning node subscribes to "joy" and passes every message
+    to input_callback (in ROS 1 this class created its own rospy.Subscriber).
+    """
+
+    def __init__(self, config, layout="legacy"):
+        if layout not in JOY_LAYOUTS:
+            raise ValueError(f"Unknown joy layout '{layout}', expected one of {sorted(JOY_LAYOUTS)}")
+        self.layout = JOY_LAYOUTS[layout]
+        self.layout_name = layout
+        self._min_buttons, self._min_axes = self._required_sizes(self.layout)
+        self._warned_short_message = False
+
         self.config = config
         self.previous_gait_toggle = 0
         self.previous_state = BehaviorState.REST
@@ -20,25 +35,51 @@ class InputInterface:
         self.trot_event = 0
         self.joystick_control_event = 0
 
-        self.input_messages = rospy.Subscriber("joy", Joy, self.input_callback)
         self.current_command = Command()
         self.new_command = Command()
         self.developing_command = Command()
 
+    @staticmethod
+    def _required_sizes(layout):
+        """Smallest number of buttons and axes a Joy message needs to hold for this layout."""
+        button_indices = list(layout["buttons"].values()) + list(layout.get("dpad_buttons", {}).values())
+        axis_indices = list(layout["axes"].values()) + list(layout.get("dpad_axes", {}).values())
+        return max(button_indices) + 1, max(axis_indices) + 1
+
+    def _dpad(self, msg):
+        """D-pad as (x, y), left and up positive, whichever way the layout reports it."""
+        if "dpad_axes" in self.layout:
+            return msg.axes[self.layout["dpad_axes"]["x"]], msg.axes[self.layout["dpad_axes"]["y"]]
+        pad = self.layout["dpad_buttons"]
+        return (msg.buttons[pad["left"]] - msg.buttons[pad["right"]],
+                msg.buttons[pad["up"]] - msg.buttons[pad["down"]])
+
     def input_callback(self, msg):
+        # A pad with fewer inputs than the layout expects would raise IndexError inside the ROS callback.
+        if len(msg.buttons) < self._min_buttons or len(msg.axes) < self._min_axes:
+            if not self._warned_short_message:
+                logger.warning(
+                    "Joy message has %d buttons and %d axes but layout '%s' needs at least %d and %d: "
+                    "ignoring it (check the joy_layout parameter)",
+                    len(msg.buttons), len(msg.axes), self.layout_name, self._min_buttons, self._min_axes)
+                self._warned_short_message = True
+            return
+
+        buttons = self.layout["buttons"]
+        axes = self.layout["axes"]
         self.developing_command = Command()
         ####### Handle discrete commands ########
         # Check if requesting a state transition to trotting, or from trotting to resting
-        gait_toggle = msg.buttons[5] #R1
+        gait_toggle = msg.buttons[buttons["trot"]] #R1
         if self.trot_event != 1:
             self.trot_event = (gait_toggle == 1 and self.previous_gait_toggle == 0)
 
         # Check if requesting a state transition to hopping, from trotting or resting
-        hop_toggle = msg.buttons[0] #x
+        hop_toggle = msg.buttons[buttons["hop"]] #x
         if self.hop_event != 1:
             self.hop_event = (hop_toggle == 1 and self.previous_hop_toggle == 0)            
         
-        joystick_toggle = msg.buttons[4] #L1
+        joystick_toggle = msg.buttons[buttons["joystick"]] #L1
         if self.joystick_control_event != 1:
             self.joystick_control_event = (joystick_toggle == 1 and self.previous_joystick_toggle == 0)
 
@@ -48,14 +89,15 @@ class InputInterface:
         self.previous_joystick_toggle = joystick_toggle
 
         ####### Handle continuous commands ########
-        x_vel = (msg.axes[1] ) * self.config.max_x_velocity #ly
-        y_vel = msg.axes[0] * self.config.max_y_velocity #lx
+        dpad_x, dpad_y = self._dpad(msg)
+        x_vel = (-1*msg.axes[axes["ly"]] ) * self.config.max_x_velocity #ly
+        y_vel = msg.axes[axes["lx"]] * self.config.max_y_velocity #lx
         self.developing_command.horizontal_velocity =  np.round(np.array([x_vel, y_vel]),self.rounding_dp)
-        self.developing_command.yaw_rate = np.round(msg.axes[3],self.rounding_dp) * self.config.max_yaw_rate #rx
+        self.developing_command.yaw_rate = np.round(msg.axes[axes["rx"]],self.rounding_dp) * self.config.max_yaw_rate #rx
 
-        self.developing_command.pitch = np.round(msg.axes[4],self.rounding_dp) * self.config.max_pitch #ry
-        self.developing_command.height_movement = np.round(msg.axes[7],self.rounding_dp) #dpady
-        self.developing_command.roll_movement = -np.round(msg.axes[6],self.rounding_dp) #dpadx
+        self.developing_command.pitch = np.round(msg.axes[axes["ry"]],self.rounding_dp) * self.config.max_pitch #ry
+        self.developing_command.height_movement = np.round(dpad_y,self.rounding_dp) #dpady
+        self.developing_command.roll_movement = -np.round(dpad_x,self.rounding_dp) #dpadx
 
         self.new_command = self.developing_command
         

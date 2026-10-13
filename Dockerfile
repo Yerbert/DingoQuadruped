@@ -1,61 +1,52 @@
-FROM osrf/ros:noetic-desktop-full
+FROM osrf/ros:humble-desktop-full
 
-RUN sudo sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
+SHELL ["/bin/bash", "-c"]
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gdb \
-    apt-utils \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-colcon-common-extensions \
     python3-rosdep \
-    python3-pip \
     python3-vcstool \
-    python3-pymodbus \
-    build-essential \
-    ros-noetic-catkin \
-    python3-catkin-tools \
-    ros-noetic-ros-controllers \
+    python3-pip \
+    ros-humble-xacro \
+    ros-humble-robot-state-publisher \
+    ros-humble-joint-state-publisher-gui \
+    ros-humble-joy \
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-ros2-control \
+    ros-humble-rmw-cyclonedds-cpp \
+    i2c-tools \
+    python3-smbus \
+    python3-libgpiod \
+    python3-evdev \
+    gdb \
     nano \
-    ros-noetic-soem \
-    libvlccore-dev \
-    libvlc-dev \
-    ros-noetic-joy \
-    ros-noetic-rosserial \
-    ros-noetic-rosserial-arduino \
-    git 
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install \
-    #Following are from pupper code
+RUN pip3 install --no-cache-dir \
     transforms3d \
-    UDPComms \
-    serial \
     pyserial \
-    pigpio \
-    regex \
-    matplotlib \
-    #Following are Nathan/Alex additions
     pynput \
     spidev \
-    #adafruit-circuitpython-pca9685 \
-    adafruit-circuitpython-servokit
+    adafruit-circuitpython-servokit \
+    adafruit-circuitpython-bno055 \
+    matplotlib \
+    numpy
 
-# Make the prompt a little nicer
-RUN echo "PS1='${debian_chroot:+($debian_chroot)}\u@:\w\$ '" >> /etc/bash.bashrc 
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# Adafruit Blinka does not know the ELTAY RM66 / ELTAY BB CM4. ORANGE_PI_3B has the same 40-pin map and I2C2 as default bus.
+ENV BLINKA_FORCEBOARD=ORANGE_PI_3B
+ENV BLINKA_FORCECHIP=RK3566
+
+RUN echo "source /opt/ros/humble/setup.bash" >> /etc/bash.bashrc
+
+COPY ros_entrypoint.sh /ros_entrypoint.sh
+RUN chmod +x /ros_entrypoint.sh
 
 WORKDIR /dingo_ws
-COPY /dingo_ws/src /dingo_ws/src
-RUN rosdep update
-RUN rosdep install --from-paths src --ignore-src -r -y
-
-RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /etc/bash.bashrc
-
-RUN /bin/bash -c 'source /opt/ros/$ROS_DISTRO/setup.bash &&\
-catkin_make --directory /dingo_ws -DCMAKE_BUILD_TYPE=Debug'
-
-RUN echo "source /opt/ros/$ROS_DISTRO/setup.bash" >> /etc/bash.bashrc
-RUN echo "source /dingo_ws/devel/setup.bash" >> /etc/bash.bashrc
-
-ENTRYPOINT ["./ros_entrypoint.sh"]
-CMD [ "bash" ]
-
-
-
+ENTRYPOINT ["/ros_entrypoint.sh"]
+CMD ["bash"]

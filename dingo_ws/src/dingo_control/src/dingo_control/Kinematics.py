@@ -5,7 +5,9 @@ from math import *
 #import matplotlib.pyplot as plt
 from dingo_control.util import RotMatrix3D, point_to_rad
 from transforms3d.euler import euler2mat
-import rospy
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
@@ -85,7 +87,7 @@ def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
     # handling mathematically invalid input, i.e., point too far away to reach
     if len_B >= (config.L2 + config.L3): 
         len_B = (config.L2 + config.L3) * 0.8
-        rospy.logwarn('target coordinate: [%f %f %f] too far away', x, y, z)
+        logger.warning('target coordinate: [%f %f %f] too far away', x, y, z)
     
     # b_1 : angle between +ve x-axis and len_B (0 <= b_1 < 2pi)
     # b_2 : angle between len_B and link_2

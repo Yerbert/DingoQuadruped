@@ -2,7 +2,9 @@
 from adafruit_servokit import ServoKit
 import numpy as np
 import math as m
-import rospy
+import logging
+
+logger = logging.getLogger(__name__)
 
 class HardwareInterface():
     def __init__(self,link):
@@ -45,9 +47,9 @@ class HardwareInterface():
             - Offsets for LOWER leg servos map allign the servo so that it is vertically down at zero degrees. Note that IK requires a transformation of
                 angle_sent_to_servo = (180-angle_from_IK) + 90 degrees to map to this physcial servo location.  """
         self.physical_calibration_offsets = np.array(
-                    [[75, 130, 113, 73],
-                    [29, 13, 33, 15],
-                    [26, 12, 30, 4]])
+                    [[59, 125, 117, 60],
+                    [0, 0, 0, 0],
+                    [0, 0, 0, 0]])
         #applying calibration values to all servos
         self.create()
 
@@ -77,7 +79,7 @@ class HardwareInterface():
                 try:
                     self.kit.servo[self.pins[axis_index,leg_index]].angle = self.servo_angles[axis_index,leg_index]
                 except:
-                    rospy.logwarn("Warning - I2C IO error")
+                    logger.warning("Warning - I2C IO error")
 ## HERE ##
 
     ##  This method is used only in the calibrate servos file will make something similar to command individual actuators. 

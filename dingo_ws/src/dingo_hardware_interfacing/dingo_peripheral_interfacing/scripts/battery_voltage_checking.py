@@ -1,112 +1,109 @@
-import RPi.GPIO as GPIO
-import sys, rospy, signal, subprocess, time
-from std_msgs.msg import Float64, Bool
+#!/usr/bin/env python3
+import subprocess
+import time
 
-def signal_handler(sig, frame):
-    GPIO.cleanup()
-    sys.exit(0)
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from std_msgs.msg import Bool, Float64
 
-def shutdown():
-    GPIO.cleanup()
-    rospy.logwarn("BATTERY VOLTAGE TOO LOW. COMMENCING SHUTDOWN PROCESS")
-    time.sleep(5)
-    subprocess.run(["sudo", "shutdown", "-h", "now"])
+from dingo_peripheral_interfacing.gpio_lines import GpioLines
 
-def main():
-    # Set the mode of the GPIO library
-    rospy.init_node("battery_monitor") 
-    message_rate = 50
-    rate = rospy.Rate(message_rate)
 
-    signal.signal(signal.SIGINT, signal_handler)
+class BatteryMonitor(Node):
+    MESSAGE_RATE = 50  # Hz
 
-    GPIO.setmode(GPIO.BCM)
+    def __init__(self):
+        super().__init__("battery_monitor")
 
-    estop_pin_number = 5
-    battery_pin1_number = 6
-    battery_pin2_number = 13
-    battery_pin3_number = 19
+        # GPIO pins by Rockchip name (see dingo_peripheral_interfacing.gpio_lines). The defaults sit on the same
+        # 40-pin header positions the Dingo PCB used on the Raspberry Pi (BCM 5, 6, 13, 19 = header pins 29, 31,
+        # 33, 35), which on the ELTAY BB CM4 are GPIO4_A5, GPIO3_D4, GPIO3_D7 and GPIO3_D0.
+        self.declare_parameter("gpio_chip", "gpiochip0")  # only used for pins given as plain line offsets
+        self.declare_parameter("estop_pin", "GPIO4_A5")
+        self.declare_parameter("battery_pins", ["GPIO3_D4", "GPIO3_D7", "GPIO3_D0"])  # most significant bit first
 
-    # Set pin 5 as an input pin
-    GPIO.setup(estop_pin_number, GPIO.IN)
-    GPIO.setup(battery_pin1_number, GPIO.IN)
-    GPIO.setup(battery_pin2_number, GPIO.IN)
-    GPIO.setup(battery_pin3_number, GPIO.IN)
+        self.estop_pin = self.get_parameter("estop_pin").value
+        self.battery_pins = list(self.get_parameter("battery_pins").value)
 
-    battery_percentage_publisher = rospy.Publisher("/battery_percentage", Float64, queue_size = 10)
-    estop_publisher = rospy.Publisher("/emergency_stop_status", Bool, queue_size = 10)
-    current_estop_bit = 0
+        self.gpio = GpioLines(self.get_parameter("gpio_chip").value, consumer="dingo-battery-monitor")
+        self.gpio.input(self.estop_pin)
+        for pin in self.battery_pins:
+            self.gpio.input(pin)
 
-    number_of_low_battery_detections = 0
+        self.battery_percentage_publisher = self.create_publisher(Float64, "/battery_percentage", 10)
+        self.estop_publisher = self.create_publisher(Bool, "/emergency_stop_status", 10)
 
-    estop_bit = GPIO.input(estop_pin_number)
-    battery_bit1 = GPIO.input(battery_pin1_number)
-    battery_bit2 = GPIO.input(battery_pin2_number)
-    battery_bit3 = GPIO.input(battery_pin3_number)
+        self.current_estop_bit = 0
+        self.number_of_low_battery_detections = 0
+        # The e-stop state is also repeated once per second: a node that starts while the e-stop is already
+        # pressed learns it within a second (in ROS 1 it never did, the state was only sent on changes).
+        self.ticks_since_estop_publish = 0
 
-    #Grab initial value and publish that immediately
-    if estop_bit == 0:
-        estop_publisher.publish(0)
-    elif estop_bit == 1:
-        estop_publisher.publish(1)
-        current_estop_bit = 1
-    
-    while not rospy.is_shutdown(): 
-        # Read the digital values from the pins
-        estop_bit = GPIO.input(estop_pin_number)
-        battery_bit1 = GPIO.input(battery_pin1_number)
-        battery_bit2 = GPIO.input(battery_pin2_number)
-        battery_bit3 = GPIO.input(battery_pin3_number)
-        print("estop: ", battery_bit1)
-        print("bit1: ", battery_bit1)
-        print("bit2: ", battery_bit2)
-        print("bit3: ", battery_bit3)
+        # Grab the initial value and publish it immediately
+        if self.gpio.read(self.estop_pin) == 1:
+            self.current_estop_bit = 1
+        self._publish_estop()
 
-        battery_bits = [battery_bit1, battery_bit2, battery_bit3]
+        self.timer = self.create_timer(1.0 / self.MESSAGE_RATE, self.step)
 
-        if estop_bit == 1 and current_estop_bit == 0:
-            current_estop_bit = 1
-            estop_publisher.publish(1)
+    def step(self):
+        estop_bit = self.gpio.read(self.estop_pin)
+        battery_bits = [self.gpio.read(pin) for pin in self.battery_pins]
 
-        if estop_bit == 0 and current_estop_bit == 1:
-            current_estop_bit = 0
-            estop_publisher.publish(0)
+        if estop_bit == 1 and self.current_estop_bit == 0:
+            self.current_estop_bit = 1
+            self._publish_estop()
 
-        # Convert the bits to a decimal number
-        num = int("".join([str(b) for b in battery_bits]), 2)
+        if estop_bit == 0 and self.current_estop_bit == 1:
+            self.current_estop_bit = 0
+            self._publish_estop()
 
-        value = 0.0
+        self.ticks_since_estop_publish += 1
+        if self.ticks_since_estop_publish >= self.MESSAGE_RATE:
+            self._publish_estop()
 
-        # Check which scenario has occurred
-        if num == 0:
-            value = 0.0
-        elif num == 1:
-            value = 0.125
-        elif num == 2:
-            value = 0.25
-        elif num == 3:
-            value = 0.375
-        elif num == 4:
-            value = 0.5
-        elif num == 5:
-            value = 0.625
-        elif num == 6:
-            value = 0.75
-        elif num == 7:
-            value = 1
+        # Convert the bits to a decimal number: 0 -> 0.0, 1 -> 0.125 ... 6 -> 0.75, 7 -> 1.0
+        num = int("".join(str(bit) for bit in battery_bits), 2)
+        value = 1.0 if num == 7 else num * 0.125
 
-        battery_percentage_publisher.publish(value)
+        self.battery_percentage_publisher.publish(Float64(data=value))
 
         if value == 0.0:
-            number_of_low_battery_detections = number_of_low_battery_detections+1
-            if (number_of_low_battery_detections > 30):
-                #shutdown()
-                print("Would shut down if activated")
-        else:
-            if (number_of_low_battery_detections > 0):
-                number_of_low_battery_detections = number_of_low_battery_detections-1
+            self.number_of_low_battery_detections += 1
+            if self.number_of_low_battery_detections > 30:
+                # self._shutdown()
+                self.get_logger().warning("Would shut down if activated", throttle_duration_sec=5.0)
+        elif self.number_of_low_battery_detections > 0:
+            self.number_of_low_battery_detections -= 1
+
+    def _publish_estop(self):
+        self.ticks_since_estop_publish = 0
+        self.estop_publisher.publish(Bool(data=bool(self.current_estop_bit)))
+
+    def _shutdown(self):
+        self.gpio.release()
+        self.get_logger().warning("BATTERY VOLTAGE TOO LOW. COMMENCING SHUTDOWN PROCESS")
+        time.sleep(5)
+        subprocess.run(["sudo", "shutdown", "-h", "now"])
+
+    def destroy_node(self):
+        self.gpio.release()
+        super().destroy_node()
 
 
-        rate.sleep()
+def main(args=None):
+    rclpy.init(args=args)
+    node = BatteryMonitor()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
-main()
+
+if __name__ == "__main__":
+    main()

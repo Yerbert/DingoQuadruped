@@ -1,0 +1,12 @@
+.git
+Chat_log.md
+Dingo_PCB/
+dingo_nano/
+*.xlsx
+*.png
+*.zip
+**/build/
+**/install/
+**/log/
+**/devel/
+**/__pycache__/

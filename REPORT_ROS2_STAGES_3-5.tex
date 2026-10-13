@@ -1,0 +1,416 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage{fontspec}
+\usepackage[russian]{babel}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}[Scale=0.88]
+
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{url}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\urlstyle{tt}
+\setlist{itemsep=2pt, topsep=4pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt}
+\renewcommand{\arraystretch}{1.15}
+
+% inline code: safe for underscores
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\todo}[1]{\textcolor{red!60!black}{#1}}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{black!30},
+  backgroundcolor=\color{black!3},
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false
+}
+
+\title{Перенос проекта Dingo на ROS~2 Humble\\[2pt]\large Этапы 3--5: логика и драйвер, ввод, железо\\и сопутствующие работы: плата ELTAY, Arduino, launch, симуляция}
+\author{Репозиторий DingoQuadruped, ветка \code{ros2}}
+\date{13 октября 2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+%% ======================================================================================
+\section{Что сделано и как читать отчёт}
+
+Отчёт описывает, что именно изменено в коде, как это сделано и почему. Нумерация этапов взята из файла \code{MIGRATION_ROS2.md}, как и для этапа~2:
+\begin{itemize}
+  \item этап~3 --- чистая логика и узел-драйвер (\code{Kinematics}, \code{Controller}, \code{dingo_driver}, \code{status_publisher});
+  \item этап~4 --- ввод: геймпад (\code{joy}) и клавиатура;
+  \item этап~5 --- железо: GPIO, I2C, SPI, UART, дисплей, батарея, IMU.
+\end{itemize}
+По отдельной просьбе в ту же работу вошли перенос Arduino-прошивки, привязка к плате ELTAY BB CM4 с модулем RM66 по её схеме пинаута, доступ Adafruit Blinka через \code{BLINKA_FORCEBOARD}, launch-файлы, описание робота и симуляция, Docker и документация. Это этапы 6--10 плана, и они описаны в разделе~\ref{sec:extra}.
+
+Этап~2 (пакет сообщений \code{dingo_msgs}, переход пакетов на \code{ament_python}) сделан раньше и здесь повторно не разбирается, на него есть только ссылки.
+
+\subsection{Итоги в цифрах}
+\begin{itemize}
+  \item Сборка \code{colcon build --symlink-install}: 9 пакетов, около 10 секунд, без ошибок и предупреждений сборки.
+  \item Автоматических проверок: 73 из 73 пройдено (раздел~\ref{sec:verify}).
+  \item Изменено файлов в \code{dingo_ws/src}: 43, добавлено 1220 строк, удалено 1040 (подробная таблица --- в приложении~\ref{app:files}). Вне \code{dingo_ws/src}: \code{Dockerfile}, \code{README.md}, \code{Useful code commands.md}, \code{.gitignore}, прошивка \code{dingo_nano/dingo_arduino.ino}.
+  \item Кода на \code{rospy}, \code{rospkg}, \code{RPi.GPIO}, \code{catkin} и \code{rosserial} в перенесённых пакетах не осталось (исключения --- в разделе~\ref{sec:limits}).
+  \item \textbf{На реальном железе ничего не запускалось}: платы, датчиков, геймпада и Arduino в среде проверки не было. Что проверено, а что нет, перечислено в разделах~\ref{sec:verify} и~\ref{sec:limits}.
+\end{itemize}
+
+\subsection{Допущения}
+\begin{itemize}
+  \item Плата --- ELTAY BB CM4 с модулем ELTAY RM66 (Rockchip RK3566). Это следует из файла \code{eltay_bb_cm4_pinout.pdf} в папке загрузок.
+  \item Плата Dingo (PCB) остаётся на тех же физических позициях 40-контактного разъёма, на которых она работала с Raspberry Pi. Это нужно подтвердить на монтаже.
+  \item Работы шли в контейнере на базе образа \code{dingo_ros2:humble} (Ubuntu 22.04, ROS~2 Humble). Образ этим отчётом не пересобирался: недостающие пакеты ставились во временные контейнеры.
+\end{itemize}
+
+%% ======================================================================================
+\section{Этап 3. Чистая логика и узел-драйвер}
+
+\subsection{Зачем}
+В ROS~1 вызовы \code{rospy} можно было ставить где угодно, в том числе внутри математики. В ROS~2 это неудобно: логика становится зависимой от версии ROS и её нельзя проверить без запущенного узла. Поэтому математика (кинематика, контроллер) очищена от ROS, а всё, что связано с темами и временем, собрано в одном узле-драйвере.
+
+\subsection{Что изменено}
+\begin{longtable}{@{}p{4.3cm}p{11.7cm}@{}}
+\toprule
+Файл & Что и как \\
+\midrule\endhead
+\code{Kinematics.py} &
+  \code{import rospy} заменён на \code{logging}, \code{rospy.logwarn} --- на \code{logger.warning}. Предупреждение <<цель слишком далеко>> по-прежнему появляется, но без ROS. \\
+\code{Controller.py} &
+  Убраны \code{rospy}, \code{geometry_msgs}, \code{std_msgs}, \code{dingo_msgs}, два издателя \code{task_space_goals} и \code{joint_space_goals} и методы \code{publish_task_space_command} и \code{publish_joint_space_command}. Сборка сообщений перенесена в драйвер. Конструктор получил необязательный параметр \code{logger}: драйвер передаёт логгер узла, поэтому сообщение о смене состояния попадает в журнал ROS (стандартный \code{logging} по умолчанию скрывает уровень \code{info}). \\
+\code{dingo/dingo_driver.py} (новый) &
+  Главный узел переписан как класс \code{DingoDriver(Node)}. Подробно ниже. Старый скрипт \code{scripts/dingo_driver.py} удалён, точка входа \code{dingo_driver} объявлена в \code{setup.py}. \\
+\code{status_publisher.py} &
+  Принимает узел и создаёт издателя через \code{node.create_publisher}; строка оборачивается в \code{String}. \\
+\code{scripts/run_robot.py} &
+  Удалён: устаревший скрипт, импортировал несуществующий \code{InputController}, нигде не запускался. \\
+\code{dingo/board_config.py} (новый) &
+  Константы и функция \code{configure_blinka()} (раздел~\ref{sec:blinka}). \\
+\bottomrule
+\end{longtable}
+
+\subsection{Теория: почему цикл пришлось переделать}
+В ROS~1 каждый колбэк подписки выполнялся в собственном потоке \code{rospy}. Поэтому старый \code{run()} мог спокойно стоять в бесконечном цикле с \code{rate.sleep()}, а колбэки \code{joy} и \code{/emergency_stop_status} при этом работали сами.
+
+В ROS~2 колбэки вызывает \emph{исполнитель} (executor) внутри \code{spin}. Если код сам занимает поток бесконечным циклом, исполнитель не получает управления, и сообщения \code{joy} и аварийного выключателя никогда не обрабатываются. Поэтому цикл превращён в \emph{таймер} на 50~Гц: на каждом такте выполняется один короткий шаг и управление возвращается исполнителю.
+
+Вложенные циклы старого \code{run()} (внешний --- <<ожидание аварийного выключателя>>, средний --- ручное управление, внутренний --- внешние команды) заменены переменной режима \code{Mode}:
+\begin{longtable}{@{}p{2.6cm}p{4.2cm}p{9.2cm}@{}}
+\toprule
+Режим & Что происходит на такте & Выход из режима \\
+\midrule\endhead
+\code{ESTOPPED} & ничего не публикуется и не исполняется & аварийный выключатель отпущен: сообщение в журнал, переход в \code{MANUAL} с позой покоя \\
+\code{MANUAL} & команда с геймпада, \code{controller.run}, публикация целей и вывод на серво или в симулятор & нажата L1: переход в \code{EXTERNAL}; нажат аварийный выключатель: в \code{ESTOPPED} \\
+\code{EXTERNAL} & робот стоит в позе покоя, принимаются \code{/joint_space_cmd} и \code{/task_space_cmd} & нажата L1: в \code{MANUAL}; нажат аварийный выключатель: в \code{ESTOPPED} \\
+\bottomrule
+\end{longtable}
+Исполнитель по умолчанию однопоточный: колбэки подписок и таймер выполняются строго по очереди. Поэтому общее состояние (\code{state}, флаги режима) не нуждается в блокировках.
+
+\subsection{Изменения в поведении (намеренные)}
+\begin{enumerate}
+  \item \textbf{Параметры вместо аргументов командной строки.} Позиционные аргументы \code{is_sim is_physical use_imu} заменены параметрами узла (значения по умолчанию те же: симуляция выключена, физический робот включён, IMU включён), добавлены \code{joy_layout} и \code{sim_command_topic}.
+  \item \textbf{Внешние команды отключаются при аварийной остановке и при входе в ручной режим.} В ROS~1 после аварийной остановки в режиме \code{EXTERNAL} флаг \code{external_commands_enabled} оставался равным~1, и команды принимались, пока робот был в ручном режиме.
+  \item \textbf{IMU подключается независимо от \code{is_physical}.} Раньше при \code{use_imu} без \code{is_physical} код падал с \code{NameError}.
+  \item \textbf{Симулятор.} Вместо 12 издателей \code{Float64} на отдельные темы --- один \code{Float64MultiArray} из 12 значений (радианы, порядок ног FR, FL, RR, RL, в каждой theta1, theta2, theta3) в тему \code{/joint_group_position_controller/commands}.
+  \item \textbf{Обработчики внешних команд исправлены.} В ROS~1 они не могли сработать ни разу (обращение к несуществующему \code{self.currently_estopped}, цикл \code{for i in 3}, индексирование полей сообщения, лишний \code{self} в вызове). Теперь они работают, при этом приняты два допущения, которые нужно подтвердить: положения стоп для \code{/task_space_cmd} принимаются как есть, без смещения на \code{LEG_ORIGINS}; углы для \code{/joint_space_cmd} принимаются в градусах (как публикуются в \code{joint_space_goals}).
+  \item \textbf{Ошибки о недопустимых командах} пишутся не чаще одного раза в 2 секунды, чтобы поток команд не засорял журнал.
+  \item Отладочные \code{print} убраны, время берётся из часов узла, завершение по Ctrl+C обрабатывает \code{rclpy}.
+\end{enumerate}
+
+%% ======================================================================================
+\section{Этап 4. Ввод: геймпад и клавиатура}
+
+\subsection{Зачем}
+Раскладка кнопок и осей \code{sensor_msgs/Joy} зависит от узла, который читает геймпад. Согласно описанию пакета \code{joy} для ROS~2, \code{joy_node} отдаёт порядок <<как у производителя устройства>>, а \code{game_controller_node} --- стандартный порядок SDL2 (крестовина приходит кнопками 11--14, а не осями). Код же был написан под одну конкретную раскладку и обращался к ней по жёстким индексам, поэтому при смене узла робот управлялся бы неверно или падал с \code{IndexError}.
+
+\subsection{Что изменено}
+\begin{itemize}
+  \item \code{InputInterface} больше не создаёт подписку сам: узел подписывается на \code{joy} и передаёт сообщения в \code{input_callback}. Так класс не зависит от \code{rclpy}.
+  \item Индексы вынесены в таблицу \code{JOY_LAYOUTS} в \code{HardwareConfig.py} (файл настроек конкретного робота) и выбираются параметром \code{joy_layout}:
+\end{itemize}
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+ & \code{legacy} (по умолчанию) & \code{game_controller} \\
+\midrule
+Режим хода (trot) & кнопка 5 (R1) & кнопка 10 (правый бампер) \\
+Прыжок (hop) & кнопка 0 (X) & кнопка 0 (A, крестик) \\
+Переключение джойстика & кнопка 4 (L1) & кнопка 9 (левый бампер) \\
+Левый стик (lx, ly) & оси 0, 1 & оси 0, 1 \\
+Правый стик (rx, ry) & оси 3, 4 & оси 2, 3 \\
+Крестовина & оси 6 (x) и 7 (y) & кнопки 11 (вверх), 12, 13 (влево), 14 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Знак крестовины приведён к прежнему соглашению (влево и вверх --- положительные значения), поэтому формулы расчёта команд не изменились.
+\begin{itemize}
+  \item Если в сообщении меньше кнопок или осей, чем требует раскладка, сообщение игнорируется с одним предупреждением вместо исключения в колбэке (в \code{rclpy} необработанное исключение останавливает узел).
+  \item \code{Keyboard.py} стал узлом \code{rclpy}: путь к устройству --- параметр \code{keyboard_device} (по умолчанию \code{/dev/input/event0}), отметка времени берётся из часов узла. Поток чтения сделан демоном, а \code{stop()} ждёт его не дольше секунды: \code{read_loop()} блокируется до следующего нажатия, и обычный \code{join()} мог зависнуть при выходе. Клавиатура публикует \emph{прежнюю} раскладку, поэтому с ней работает значение \code{legacy}.
+\end{itemize}
+\textbf{Не проверено:} знаки осей стиков в \code{game_controller_node} в документации не указаны. Принято допущение, что они совпадают с прежними; его нужно проверить командой \code{ros2 topic echo /joy} на настоящем геймпаде.
+
+%% ======================================================================================
+\section{Этап 5. Железо}
+
+\subsection{Зачем}
+Библиотека \code{RPi.GPIO} работает только на Raspberry Pi, а у нового модуля другой процессор и другая нумерация линий. Кроме того, в ROS~2 нет \code{rospy} и \code{rospkg}, которые использовались в узлах периферии.
+
+\subsection{Слой GPIO на libgpiod (\code{gpio_lines.py}, новый)}
+\begin{itemize}
+  \item Использован \code{libgpiod} (пакет \code{python3-libgpiod}, Ubuntu~22.04, интерфейс версии~1): он работает на любой плате с Linux и не требует прав к \code{/dev/mem}. Если установлены привязки версии~2, выдаётся понятная ошибка.
+  \item Линию можно задать именем из схемы платы (\code{GPIO4_A5}) или номером линии. Имя разбирается так: микросхема --- та, у которой метка \code{gpio<банк>}, номер линии --- \code{группа $\times$ 8 + номер} (A=0, B=1, C=2, D=3). Например, \code{GPIO3_D4} --- линия 28 микросхемы \code{gpio3}. Поэтому номера \code{gpiochipN} знать не нужно.
+  \item Освобождение линий безопасно вызывать повторно.
+\end{itemize}
+
+\subsection{Узлы и драйверы}
+\begin{longtable}{@{}p{4.3cm}p{11.7cm}@{}}
+\toprule
+Файл & Что и как \\
+\midrule\endhead
+\code{battery_voltage_checking.py} &
+  Класс \code{BatteryMonitor(Node)} с таймером 50~Гц. Логика не изменена: три бита заряда образуют число, значение --- число $\times$ 0.125 (7 даёт 1.0); состояние аварийного выключателя публикуется при изменении; счётчик низкого заряда прежний. Пины и микросхема --- параметры (\code{estop_pin}, \code{battery_pins}, \code{gpio_chip}). Убраны четыре \code{print} на каждом такте (в одном из них была ошибка: вместо аварийного выключателя печатался первый бит заряда). \\
+\code{lcdconfig.py}, \code{LCD_1inch47.py} &
+  Вместо \code{RPi.GPIO} используется \code{GpioLines}. Шина SPI открывается в конструкторе: раньше \code{spidev.SpiDev(0,0)} стоял в аргументе по умолчанию и открывал устройство уже \emph{при импорте модуля}. Шина и устройство --- параметры (\code{spi_bus}, \code{spi_device}). Подсветка управляется как включено/выключено: у libgpiod нет ШИМ, плавная яркость недоступна. \\
+\code{dingo_lcd_interfacing.py} &
+  Узел \code{rclpy} с таймером 50~Гц. Путь к значку батареи берётся через \code{ament_index_python} (значок устанавливается \code{setup.py} в \code{share}), вместо \code{rospkg}. Пины и SPI --- параметры. Закрытие дисплея вынесено в \code{shutdown_display}. \\
+\code{IMU.py} &
+  Убран неиспользуемый \code{import rospy}. \\
+\code{HardwareInterface.py} &
+  \code{rospy.logwarn} заменён на \code{logging}. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Доступ Adafruit Blinka к плате}\label{sec:blinka}
+Для PCA9685 (сервоплата) и BNO055 (IMU) используется Blinka. Она сама не знает модуль RM66: без указания платы у модуля \code{board} нет даже атрибута \code{D29} (проверено в контейнере). Поэтому плата задаётся переменными \code{BLINKA_FORCEBOARD} и \code{BLINKA_FORCECHIP}.
+
+Какое значение выбрать, определено по данным, а не по догадке. В установленной Blinka 9.2.0 есть чип \code{RK3566} и плата \code{ORANGE_PI_3B}, и её карта 40-контактного разъёма сравнена программно со схемой ELTAY: из 28 GPIO-пинов совпали все 28, нет ни одного расхождения. Основная шина I2C этой платы --- I2C2 на пинах 3 и 5, то есть именно та, что нужна.
+
+Значения прописаны в трёх местах, каждое действует в своей ситуации:
+\begin{itemize}
+  \item \code{Dockerfile}: \code{ENV BLINKA_FORCEBOARD=ORANGE_PI_3B} и \code{ENV BLINKA_FORCECHIP=RK3566};
+  \item \code{dingo.launch.py}: задаёт переменные для запускаемых узлов, но не перезаписывает уже заданные;
+  \item \code{dingo_driver.main()}: вызывает \code{configure_blinka()} до импорта \code{board}.
+\end{itemize}
+Что проверено в контейнере и что требует платы: при заданных переменных определения пинов загружаются, но Blinka на RK3566 открывает \code{/dev/gpiochip0}--\code{gpiochip4} во время импорта. В контейнере без GPIO-устройств импорт падает с \code{FileNotFoundError}. Значит, на плате нужно убедиться командой \code{ls /dev/gpiochip*}, что образ ОС даёт именно эти устройства, иначе \code{board} не импортируется.
+
+%% ======================================================================================
+\section{Сопутствующие работы по запросу}\label{sec:extra}
+
+\subsection{Схема пинаута и привязка к плате}
+Принято, что модуль Dingo стоит на тех же физических позициях разъёма, что и у Raspberry Pi (номера BCM пересчитаны в номера пинов разъёма и затем в имена линий платы).
+\begin{center}
+\small
+\begin{tabular}{@{}p{5.2cm}lll@{}}
+\toprule
+Назначение & BCM (Pi) & Пин разъёма & Линия ELTAY BB CM4 \\
+\midrule
+I2C SDA / SCL & 2 / 3 & 3 / 5 & I2C2 (\code{/dev/i2c-2}) \\
+SPI MOSI, MISO, CLK, CS0 & 10, 9, 11, 8 & 19, 21, 23, 24 & SPI3 (\code{/dev/spidev3.0}) \\
+LCD RST & 27 & 13 & GPIO4\_A0 \\
+LCD DC & 25 & 22 & GPIO4\_A4 \\
+LCD подсветка & 18 & 12 & GPIO3\_C7 \\
+Аварийный выключатель & 5 & 29 & GPIO4\_A5 \\
+Биты заряда & 6, 13, 19 & 31, 33, 35 & GPIO3\_D4, GPIO3\_D7, GPIO3\_D0 \\
+Последовательный порт Nano & 14, 15 & 8, 10 & \textbf{не подходит}; принят USB (\code{/dev/ttyUSB0}), для провода --- UART7, пины 15, 16 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Важные следствия из схемы:
+\begin{itemize}
+  \item \textbf{Пины 8 и 10 (старый \code{/dev/ttyS0}) на этой плате --- отладочный UART2}, уровень только 3.3~В, использовать его под приложение не рекомендуется. Nano подключается по USB, по умолчанию принят \code{/dev/ttyUSB0} (или \code{/dev/ttyACM0}, зависит от чипа Nano). Для проводного подключения подошёл бы UART7 (пины 15 и 16 через преобразователь уровней, обычно \code{/dev/ttyS7}). Открытие USB-порта перезагружает Nano, а скетч ждёт 15 секунд перед отправкой, поэтому первые данные приходят примерно через 15 секунд после запуска узла.
+  \item Уровень сигналов разъёма определяется впаянным резистором: R78 --- 3.3~В, R77 --- 1.8~В. До подключения нужно проверить, какой стоит на плате.
+  \item Питание платы от батареи Dingo (14.8--16.8~В) укладывается в диапазон 7--27~В разъёма XP10, но полярность в документации не указана, а защиты от переполюсовки в ней нет.
+  \item Альтернативные функции пинов (например, GPIO4\_A5 --- ещё и UART9\_RX) должны быть выбраны как GPIO в дереве устройств образа; это проверяется на плате.
+\end{itemize}
+
+\subsection{Arduino: замена rosserial}
+\code{rosserial} в ROS~2 не существует, а micro-ROS не помещается в ATmega328 (Nano V3). Поэтому прошивка больше не использует ROS: вся логика измерений (делители напряжения, усреднение, определение аварийной остановки по падению напряжения на buck-преобразователе серво) осталась без изменений, а передача данных заменена текстовым кадром по Serial:
+\begin{lstlisting}
+$DINGO,<estop 0|1>,<battery V>,<servo buck V>*<XOR checksum, 2 hex digits>
+$DINGO,0,16.42,7.03*62
+\end{lstlisting}
+Контрольная сумма --- XOR символов между \code{\$} и \code{*}. Кадр уходит раз в секунду и сразу при смене состояния аварийного выключателя. Строка, начинающаяся с \code{\#}, --- сообщение для журнала (например, о выключении при низком заряде). Из прошивки убраны ожидание первого байта от компьютера (рукопожатие rosserial) и три секунды пауз на запуск издателей; пауза 15 секунд при старте сохранена. Сгенерированный заголовок rosserial \code{ElectricalMeasurements.h} удалён.
+
+На стороне компьютера кадры читает узел \code{arduino_bridge} (\code{dingo_peripheral_interfacing}): он публикует \code{/electrical_measurements} и \code{/emergency_stop_status}, повторно открывает порт при потере связи, игнорирует повреждённые строки и умеет собирать кадр, пришедший двумя частями.
+
+\subsection{Решение по аварийному выключателю}
+Сначала статус аварийной остановки был сделан <<защёлкнутым>> (QoS \code{transient_local}), чтобы поздно запущенный подписчик узнавал его сразу. Проверка показала ловушку: обычный \code{ros2 topic pub} использует QoS \code{volatile} и \emph{молча не соединяется} с таким подписчиком. Для сигнала безопасности это недопустимо, поэтому принято другое решение: издатели (\code{arduino_bridge}, \code{BatteryMonitor}) повторяют текущее состояние раз в секунду и сразу публикуют изменение, подписчик использует обычный QoS и совместим с любым издателем. Поздно запущенный узел узнаёт состояние не позже, чем через секунду. В ROS~1 он не узнавал его никогда.
+
+\subsection{Launch-файлы}
+Все XML-файлы запуска переписаны на Python:
+\begin{center}
+\small
+\begin{tabular}{@{}p{5.3cm}p{10.4cm}@{}}
+\toprule
+Файл & Назначение \\
+\midrule
+\code{dingo.launch.py} &
+  Драйвер, \code{joy_node}, клавиатура, \code{arduino_bridge}, узел LCD. Аргументы \code{is_sim}, \code{is_physical}, \code{use_joystick}, \code{use_keyboard}, \code{use_imu}, \code{serial_port}, \code{joy_layout}, \code{joy_executable}. Булевы значения теперь \code{true}/\code{false}, а не 1/0. \\
+\code{dingo_simulator.launch.py}, \code{dingo_gazebo_sim.launch.py} &
+  Только подключают симуляцию (как и в ROS~1). \\
+\code{simulation.launch.py} (\code{dingo_gazebo}) &
+  Gazebo, \code{robot_state_publisher}, создание робота и последовательный запуск контроллеров. \\
+\code{dingo_rviz.launch.py}, \code{dingo_state_publisher.launch.py} &
+  Описание робота и rviz2. \\
+\code{lcd.launch.py} &
+  Узел LCD (в старом файле было неверное имя пакета). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Описание робота и симуляция}
+\begin{itemize}
+  \item Пакеты \code{dingo_description} и \code{dingo_gazebo} переведены на \code{ament_cmake} (устанавливают URDF, меши, launch, конфиги). В установку не попадают \code{meshes/main.py} и резервная копия \code{dingo copy.urdf}.
+  \item В \code{dingo.urdf} удалены 12 блоков \code{transmission} и плагины ROS~1 (\code{gazebo_ros_control}, \code{joint_state_publisher}); добавлены \code{gazebo_ros2_control} и блок \code{ros2_control} (12 суставов, командный интерфейс position). IMU перенесён на плагин ROS~2, тема осталась прежней (\code{/notspot_imu/base_link_orientation}).
+  \item \code{controllers.yaml} переписан: вместо 12 PID-контроллеров усилия --- один \code{JointGroupPositionController} и \code{joint_state_broadcaster}. \textbf{Это изменение поведения симуляции}: суставы идут к заданному положению напрямую, без PID по моменту.
+  \item Настоящего конфига rviz в проекте не было: файл \code{dingo_rviz.rviz} оказался побайтной копией launch-файла. Он удалён, создан рабочий \code{rviz/dingo.rviz} для rviz2.
+  \item Обнаружены и исправлены две причины, по которым симуляция не запускалась (обе найдены в логе, а не угаданы):
+  \begin{enumerate}
+    \item Gazebo читает \code{package://dingo_description/\ldots} как \code{model://dingo_description/\ldots}, не находит такую модель и пытается скачать её из интернета, блокируя загрузку мира. В \code{simulation.launch.py} задаётся \code{GAZEBO_MODEL_PATH} (стандартные модели плюс каталог \code{share}).
+    \item \code{gazebo_ros2_control} передаёт URDF контроллеру как YAML-значение параметра, и двоеточие с пробелом внутри XML-комментария ломает разбор. Это были комментарий SolidWorks (\code{Commit Version: \ldots}) и два моих собственных; комментарии переформулированы, правило записано в README и в URDF.
+  \end{enumerate}
+\end{itemize}
+
+\subsection{Остальное}
+Обновлены \code{Dockerfile} (пакеты \code{python3-libgpiod}, \code{python3-evdev}, переменные Blinka), \code{README.md} (установка и запуск для ROS~2, раздел о плате ELTAY, пины, UART, I2C, SPI, права), \code{Useful code commands.md} (команды ROS~2, служба systemd вместо \code{robot_upstart}), \code{.gitignore} (\code{build/}, \code{install/}, \code{log/}). Удалён корневой \code{dingo_ws/CMakeLists.txt}: символическая ссылка на файл ROS~1 Noetic, которой в ROS~2 нет.
+
+%% ======================================================================================
+\section{Проверка}\label{sec:verify}
+
+\subsection{Методика}
+Всё запускалось в контейнере на образе \code{dingo_ros2:humble} из чистой копии репозитория; недостающие \code{python3-libgpiod}, \code{python3-evdev}, \code{python3-pil} ставились во временный контейнер. Тесты лежат вне репозитория (во временной папке) и в коммит не входят. Сеть ROS ограничена локальным узлом (\code{ROS_LOCALHOST_ONLY=1}).
+
+\subsection{Результаты}
+\begin{longtable}{@{}p{3.2cm}p{1.6cm}p{11.2cm}@{}}
+\toprule
+Группа & Проверок & Что подтверждено \\
+\midrule\endhead
+Сборка & --- & \code{colcon build}: 9 пакетов без ошибок. \\
+Геймпад & 9 & обе раскладки (кнопки, оси, крестовина), одноразовость событий, короткое сообщение не вызывает исключение, неизвестная раскладка отклоняется. \\
+Драйвер & 17 & старт в \code{MANUAL}; публикация целей с частотой около 50~Гц; \code{REST}$\leftrightarrow$\code{TROT}; отказ внешним командам в ручном режиме; \code{MANUAL}$\leftrightarrow$\code{EXTERNAL}; аварийная остановка (отключает внешние команды, публикация прекращается); возобновление после отпускания; порядок 12 значений для симуляции. \\
+GPIO и батарея & 19 & разбор имён пинов, открытие микросхемы по метке, повторная заявка линии, v2-привязки; значения заряда 111, 101, 001; публикация изменения аварийного выключателя сразу и повтор раз в секунду; позднее подключение; освобождение линий. \\
+Клавиатура & 5 & параметр устройства, клавиши W, 1, Backspace, 7, отпускание клавиш, остановка потока. \\
+LCD & 9 & ленивое открытие SPI, пины по умолчанию, инициализация по SPI, закрытие, процент заряда 15.4~В $\to$ 50\%. \\
+Мост Arduino & 14 & разбор кадра и 5 видов брака, доставка данных через псевдотерминал, склейка кадра из двух частей, повтор статуса, отсутствие порта. \\
+\midrule
+\textbf{Итого} & \textbf{73} & \textbf{73 из 73 пройдено} \\
+\bottomrule
+\end{longtable}
+
+Дополнительно:
+\begin{itemize}
+  \item \textbf{URDF}: \code{xacro} обрабатывает файл, \code{check_urdf} разбирает модель (корень \code{base_link}, 4 дочерних звена), блоков \code{transmission} нет.
+  \item \textbf{Запуск}: \code{ros2 launch dingo dingo.launch.py is_physical:=false use_joystick:=false} поднимает узел \code{/dingo} с верными параметрами; тема \code{joint_space_goals} публикуется с частотой около 50~Гц.
+  \item \textbf{Симуляция}: Gazebo без окна, оба контроллера в состоянии \code{active}, 12 командных интерфейсов заняты; после запуска драйвера в режиме симуляции положения суставов в \code{/joint_states} совпадают с командами (например, 0.928 и $-$0.281~рад для ног FR и FL); IMU публикуется.
+  \item \textbf{Прошивка Arduino}: скомпилирована на ПК с заглушками API Arduino и выполнена: кадры корректны, состояние аварийной остановки меняется и отправляется сразу. Это проверка логики, а не прошивки на реальной ATmega328.
+  \item \textbf{Пинаут}: программное сравнение таблицы платы с картой Blinka --- 28 из 28 совпадений.
+\end{itemize}
+
+\subsection{Что не проверено}
+\begin{itemize}
+  \item Работа на самой плате: устройства \code{/dev/i2c-2}, \code{/dev/spidev3.0}, USB-порт Nano (\code{/dev/ttyUSB0}), микросхемы GPIO по меткам, импорт Blinka при реальных \code{/dev/gpiochip0}--\code{4}, ответ PCA9685 (0x40) и BNO055 (0x28/0x29).
+  \item Реальные серво, физический аварийный выключатель, дисплей, геймпад (знаки осей \code{game_controller_node}), клавиатура на \code{/dev/input}.
+  \item Прошивка реальной Arduino Nano и связь с ней по USB.
+  \item Окна Gazebo и rviz2, работа по сети с настоящим DDS (проверка шла на одном узле).
+  \item Пересборка образа Docker командой \code{docker compose build} с обновлённым \code{Dockerfile}.
+\end{itemize}
+
+%% ======================================================================================
+\section{Ограничения и рекомендации}\label{sec:limits}
+\begin{enumerate}
+  \item \textbf{Сторожевой таймер аварийного выключателя.} Если Arduino перестанет присылать кадры, драйвер этого не заметит (как и в ROS~1 при падении rosserial). Рекомендуется считать отсутствие кадров аварийной остановкой; в код это не добавлено, потому что меняет правила безопасности и должно быть решением владельца.
+  \item \textbf{Раскладка и знаки геймпада} при использовании \code{game_controller_node} проверить на реальном устройстве.
+  \item \textbf{Семантика внешних команд} (положения стоп без смещения \code{LEG_ORIGINS}, суставы в градусах) принята по умолчанию, нужно подтвердить.
+  \item \textbf{Симуляция без PID по моменту.} Если нужна физика с моментами, потребуется другой контроллер (например, \code{joint_trajectory_controller} с усилием).
+  \item \textbf{Яркость подсветки LCD} не регулируется (нет ШИМ в libgpiod). Аппаратный ШИМ пинов 7 и 32 задаётся в дереве устройств.
+  \item \textbf{Циклические импорты между пакетами} (\code{dingo_control} $\leftrightarrow$ \code{dingo_input_interfacing}, \code{dingo_utilities}) не объявлены в \code{package.xml}, потому что \code{colcon} запрещает циклы. Стоит развести их в будущем.
+  \item \textbf{Оставшийся код ROS~1 вне перенесённых пакетов:} \code{dingo_gazebo/scripts} (файл на \code{rospy}, нигде не используется), \code{dingo_utilities/.../Tests.py} (импортирует несуществующие модули). Не затронуты, кандидаты на удаление.
+  \item \textbf{Образ Docker нужно пересобрать}, чтобы в него попали \code{python3-libgpiod}, \code{python3-evdev} и переменные Blinka. Система rosdep не знает \code{spidev}, \code{adafruit-circuitpython-*}, \code{RPi}-аналогов: они ставятся через pip (как и раньше).
+  \item \textbf{Питание Nano.} Не подключать USB и питание от платы одновременно.
+  \item \textbf{Уровни сигналов} платы (3.3 или 1.8~В) и полярность XP10 проверить до подачи питания.
+\end{enumerate}
+
+%% ======================================================================================
+\appendix
+\section{Изменённые файлы}\label{app:files}
+Сравнение выполнено по состоянию дерева \code{dingo_ws/src} до этапов 3--5 (после этапа~2). Меши и служебные каталоги не учитывались.
+
+\begin{longtable}{@{}p{10.3cm}p{2.1cm}p{1.6cm}p{1.6cm}@{}}
+\toprule
+Файл & Состояние & Добавлено & Удалено \\
+\midrule\endhead
+\path{dingo/launch/dingo.launch} & удалён & 0 & 35 \\
+\path{dingo/launch/dingo.launch.py} & новый & 79 & 0 \\
+\path{dingo/launch/dingo_gazebo_sim.launch} & удалён & 0 & 4 \\
+\path{dingo/launch/dingo_gazebo_sim.launch.py} & новый & 12 & 0 \\
+\path{dingo/launch/dingo_simulator.launch} & удалён & 0 & 4 \\
+\path{dingo/launch/dingo_simulator.launch.py} & новый & 12 & 0 \\
+\path{dingo/package.xml} & изменён & 6 & 0 \\
+\path{dingo/scripts/dingo_driver.py} & удалён & 0 & 253 \\
+\path{dingo/scripts/run_robot.py} & удалён & 0 & 160 \\
+\path{dingo/setup.py} & изменён & 6 & 2 \\
+\path{dingo/src/dingo/board_config.py} & новый & 17 & 0 \\
+\path{dingo/src/dingo/dingo_driver.py} & новый & 270 & 0 \\
+\path{dingo/src/dingo/status_publisher.py} & изменён & 3 & 4 \\
+\path{dingo_control/src/dingo_control/Controller.py} & изменён & 5 & 31 \\
+\path{dingo_control/src/dingo_control/Kinematics.py} & изменён & 4 & 2 \\
+\path{dingo_description/CMakeLists.txt} & изменён & 10 & 9 \\
+\path{dingo_description/launch/dingo_rviz.launch} & удалён & 0 & 18 \\
+\path{dingo_description/launch/dingo_rviz.launch.py} & новый & 24 & 0 \\
+\path{dingo_description/launch/dingo_rviz.rviz} & удалён & 0 & 18 \\
+\path{dingo_description/launch/dingo_state_publisher.launch} & удалён & 0 & 8 \\
+\path{dingo_description/launch/dingo_state_publisher.launch.py} & новый & 21 & 0 \\
+\path{dingo_description/package.xml} & изменён & 16 & 12 \\
+\path{dingo_description/rviz/dingo.rviz} & новый & 37 & 0 \\
+\path{dingo_description/urdf/dingo.urdf} & изменён & 40 & 157 \\
+\path{dingo_gazebo/CMakeLists.txt} & изменён & 6 & 2 \\
+\path{dingo_gazebo/config/controllers.yaml} & изменён & 28 & 67 \\
+\path{dingo_gazebo/launch/simulation.launch} & удалён & 0 & 45 \\
+\path{dingo_gazebo/launch/simulation.launch.py} & новый & 75 & 0 \\
+\path{dingo_gazebo/package.xml} & изменён & 18 & 3 \\
+\path{dingo_hardware_interfacing/dingo_input_interfacing/scripts/Keyboard.py} & изменён & 30 & 22 \\
+\path{dingo_hardware_interfacing/dingo_input_interfacing/src/dingo_input_interfacing/HardwareConfig.py} & изменён & 17 & 0 \\
+\path{dingo_hardware_interfacing/dingo_input_interfacing/src/dingo_input_interfacing/InputInterface.py} & изменён & 55 & 13 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/launch/LCD_service.launch} & удалён & 0 & 3 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/launch/lcd.launch.py} & новый & 9 & 0 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/scripts/LCD_1inch47.py} & изменён & 7 & 7 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/scripts/battery_voltage_checking.py} & изменён & 85 & 89 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/scripts/dingo_lcd_interfacing.py} & изменён & 67 & 43 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/scripts/lcdconfig.py} & изменён & 25 & 25 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/setup.py} & изменён & 6 & 1 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/src/dingo_peripheral_interfacing/IMU.py} & изменён & 0 & 1 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/src/dingo_peripheral_interfacing/arduino_bridge.py} & новый & 132 & 0 \\
+\path{dingo_hardware_interfacing/dingo_peripheral_interfacing/src/dingo_peripheral_interfacing/gpio_lines.py} & новый & 94 & 0 \\
+\path{dingo_hardware_interfacing/dingo_servo_interfacing/src/dingo_servo_interfacing/HardwareInterface.py} & изменён & 4 & 2 \\
+\midrule
+\textbf{Итого: 43 файла} & & \textbf{1220} & \textbf{1040} \\
+\bottomrule
+\end{longtable}
+
+Вне \code{dingo_ws/src} (по данным \code{git diff}, добавлено/удалено): \path{Dockerfile} +6/$-$0, \path{README.md} +95/$-$65, \path{Useful code commands.md} +32/$-$22, \path{.gitignore} +6/$-$1, \path{dingo_nano/dingo_arduino.ino} +52/$-$60; удалены \path{dingo_nano/dingo_peripheral_interfacing/ElectricalMeasurements.h} (86 строк) и \path{dingo_ws/CMakeLists.txt} (символическая ссылка).
+
+\section{Как воспроизвести проверку}
+\begin{lstlisting}
+docker compose -f Docker-compose.yaml build        # image with libgpiod, evdev and the BLINKA_* variables
+docker compose -f Docker-compose.yaml up -d
+docker compose -f Docker-compose.yaml exec dingoquadruped bash
+cd /dingo_ws && colcon build --symlink-install && source install/setup.bash
+
+ros2 launch dingo dingo.launch.py is_physical:=false use_joystick:=false
+ros2 launch dingo_gazebo simulation.launch.py gui:=false
+ros2 launch dingo dingo.launch.py is_physical:=false is_sim:=true use_joystick:=false
+\end{lstlisting}
+
+\end{document}

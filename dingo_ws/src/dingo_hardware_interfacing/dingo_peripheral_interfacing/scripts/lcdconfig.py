@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # /*****************************************************************************
 # * | File        :	  epdconfig.py
 # * | Author      :   Waveshare team
@@ -34,34 +35,37 @@ import spidev
 import logging
 import numpy as np
 
+from dingo_peripheral_interfacing.gpio_lines import GpioLines
+
+# Waveshare hardware layer. Despite the class name it no longer needs a Raspberry Pi: GPIO goes through
+# libgpiod (line offsets of gpio_chip) and SPI through spidev (spi_bus/spi_device).
 class RaspberryPi:
-    def __init__(self,spi=spidev.SpiDev(0,0),spi_freq=40000000,rst = 27,dc = 25,bl = 18,bl_freq=1000,i2c=None,i2c_freq=100000):
-        import RPi.GPIO      
+    def __init__(self,spi=None,spi_freq=40000000,rst = "GPIO4_A0",dc = "GPIO4_A4",bl = "GPIO3_C7",bl_freq=1000,i2c=None,i2c_freq=100000,
+                 gpio_chip="gpiochip0",spi_bus=3,spi_device=0):
         self.np=np
         self.RST_PIN= rst
         self.DC_PIN = dc
         self.BL_PIN = bl
         self.SPEED  =spi_freq
         self.BL_freq=bl_freq
-        self.GPIO = RPi.GPIO
-        #self.GPIO.cleanup()
-        self.GPIO.setmode(self.GPIO.BCM)
-        self.GPIO.setwarnings(False)
-        self.GPIO.setup(self.RST_PIN,   self.GPIO.OUT)
-        self.GPIO.setup(self.DC_PIN,    self.GPIO.OUT)
-        self.GPIO.setup(self.BL_PIN,    self.GPIO.OUT)
-        self.GPIO.output(self.BL_PIN,   self.GPIO.HIGH)        
-        #Initialize SPI
+        self.GPIO = GpioLines(gpio_chip, consumer="dingo-lcd")
+        self.GPIO.output(self.RST_PIN, 0)
+        self.GPIO.output(self.DC_PIN, 0)
+        self.GPIO.output(self.BL_PIN, 1)
+        #Initialize SPI (opened here, not at import time, so the bus can be chosen per board)
+        if spi is None:
+            spi = spidev.SpiDev()
+            spi.open(spi_bus, spi_device)
         self.SPI = spi
         if self.SPI!=None :
             self.SPI.max_speed_hz = spi_freq
             self.SPI.mode = 0b00
 
     def digital_write(self, pin, value):
-        self.GPIO.output(pin, value)
+        self.GPIO.write(pin, value)
 
     def digital_read(self, pin):
-        return self.GPIO.input(pin)
+        return self.GPIO.read(pin)
 
     def delay_ms(self, delaytime):
         time.sleep(delaytime / 1000.0)
@@ -69,18 +73,16 @@ class RaspberryPi:
     def spi_writebyte(self, data):
         if self.SPI!=None :
             self.SPI.writebytes(data)
+
+    # libgpiod has no PWM: the backlight is simply on (duty > 0) or off, brightness cannot be dimmed.
     def bl_DutyCycle(self, duty):
-        self._pwm.ChangeDutyCycle(duty)
+        self.GPIO.write(self.BL_PIN, 1 if duty > 0 else 0)
         
     def bl_Frequency(self,freq):
-        self._pwm.ChangeFrequency(freq)
+        pass
            
     def module_init(self):
-        self.GPIO.setup(self.RST_PIN, self.GPIO.OUT)
-        self.GPIO.setup(self.DC_PIN, self.GPIO.OUT)
-        self.GPIO.setup(self.BL_PIN, self.GPIO.OUT)
-        self._pwm=self.GPIO.PWM(self.BL_PIN,self.BL_freq)
-        self._pwm.start(100)
+        self.GPIO.write(self.BL_PIN, 1)
         if self.SPI!=None :
             self.SPI.max_speed_hz = self.SPEED        
             self.SPI.mode = 0b00     
@@ -92,12 +94,11 @@ class RaspberryPi:
             self.SPI.close()
         
         logging.debug("gpio cleanup...")
-        self.GPIO.output(self.RST_PIN, 1)
-        self.GPIO.output(self.DC_PIN, 0)        
-        self._pwm.stop()
+        self.GPIO.write(self.RST_PIN, 1)
+        self.GPIO.write(self.DC_PIN, 0)        
         time.sleep(0.001)
-        self.GPIO.output(self.BL_PIN, 1)
-        self.GPIO.cleanup()
+        self.GPIO.write(self.BL_PIN, 1)
+        self.GPIO.release()
 
 
 '''

@@ -1,14 +1,15 @@
-cmake_minimum_required(VERSION 2.8.3)
-
+cmake_minimum_required(VERSION 3.8)
 project(dingo_description)
 
-find_package(catkin REQUIRED)
+find_package(ament_cmake REQUIRED)
 
-catkin_package()
+install(DIRECTORY config launch rviz
+  DESTINATION share/${PROJECT_NAME})
 
-find_package(roslaunch)
+# meshes/main.py (mesh inertia helper) and "dingo copy.urdf" (a backup copy) are not part of the runtime package
+install(DIRECTORY meshes urdf
+  DESTINATION share/${PROJECT_NAME}
+  PATTERN "*.py" EXCLUDE
+  PATTERN "* copy.urdf" EXCLUDE)
 
-foreach(dir config launch meshes urdf)
-	install(DIRECTORY ${dir}/
-		DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/${dir})
-endforeach(dir)
+ament_package()

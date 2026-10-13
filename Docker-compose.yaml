@@ -1,22 +1,22 @@
-
-version: '3.4'
-
 services:
   dingoquadruped:
-    image: dingo_ws
-    network_mode: "host"
-    privileged: true
-    cap_add:
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined   
-    volumes:
-      - ./dingo_ws:/dingo_ws
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
-    devices:
-      - /dev:/dev
+    image: dingo_ros2:humble
     build:
       context: .
       dockerfile: ./Dockerfile
-    command: /bin/sh -c "while sleep 1000; do :; done"
+    network_mode: host
+    privileged: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    volumes:
+      - ./dingo_ws:/dingo_ws
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /etc/localtime:/etc/localtime:ro
+    devices:
+      - /dev/dri:/dev/dri
+    stdin_open: true
+    tty: true
+    command: sleep infinity

@@ -1,40 +1,56 @@
 #!/usr/bin/env python3
-import rospy
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from ament_index_python.packages import get_package_share_directory
 import spidev as SPI
 import LCD_1inch47
 from PIL import Image, ImageDraw, ImageFont
 import logging
 import os
-import rospkg
 import socket
 import time
 from std_msgs.msg import Float64
-from dingo_peripheral_interfacing.msg import ElectricalMeasurements
+from dingo_msgs.msg import ElectricalMeasurements
 
-rospack = rospkg.RosPack()
-rospack.get_path('dingo_peripheral_interfacing') + "/lib/emptybatterystatus_white.png"
 
-class DingoDisplayNode:
+class DingoDisplayNode(Node):
     def __init__(self):
-        rospy.init_node('dingo_display_node')
-        self.rate = rospy.Rate(50)  # 50 Hz
-        # Raspberry Pi pin configuration:
-        self.RST = 27
-        self.DC = 25
-        self.BL = 18
-        self.bus = 0
-        self.device = 0
+        super().__init__('dingo_display_node')
+        # Display wiring. The defaults sit on the 40-pin header positions the Dingo PCB used on the Raspberry Pi:
+        # RST BCM27 = pin 13 = GPIO4_A0, DC BCM25 = pin 22 = GPIO4_A4, BL BCM18 = pin 12 = GPIO3_C7. The SPI pins
+        # (MOSI 19, MISO 21, CLK 23, CS0 24) are SPI3 on the ELTAY BB CM4, i.e. /dev/spidev3.0.
+        self.declare_parameter('gpio_chip', 'gpiochip0')  # only used for pins given as plain line offsets
+        self.declare_parameter('rst_pin', 'GPIO4_A0')
+        self.declare_parameter('dc_pin', 'GPIO4_A4')
+        self.declare_parameter('bl_pin', 'GPIO3_C7')
+        self.declare_parameter('spi_bus', 3)
+        self.declare_parameter('spi_device', 0)
         self.ssid = ''
         self.ipAddress = ''
-        self.disp = LCD_1inch47.LCD_1inch47()
+        self.disp = LCD_1inch47.LCD_1inch47(
+            rst=self.get_parameter('rst_pin').value,
+            dc=self.get_parameter('dc_pin').value,
+            bl=self.get_parameter('bl_pin').value,
+            gpio_chip=self.get_parameter('gpio_chip').value,
+            spi_bus=self.get_parameter('spi_bus').value,
+            spi_device=self.get_parameter('spi_device').value,
+        )
         # Initialize library.
         self.disp.Init()
         # Clear display.
         self.disp.clear()
 
-        self.battery_voltage_subscriber = rospy.Subscriber("/electrical_measurements", ElectricalMeasurements, self.update_battery_percentage)
+        # installed by setup.py into share/dingo_peripheral_interfacing/lib
+        self.battery_icon_path = os.path.join(
+            get_package_share_directory('dingo_peripheral_interfacing'), 'lib', 'emptybatterystatus_white.png')
+
+        self.battery_voltage_subscriber = self.create_subscription(
+            ElectricalMeasurements, "/electrical_measurements", self.update_battery_percentage, 10)
 
         self.battery_percentage = 0.7  # Number between 0 and 1
+
+        self.timer = self.create_timer(1.0 / 50, self.run)  # 50 Hz
 
     def update_battery_percentage(self, message):
 
@@ -48,19 +64,19 @@ class DingoDisplayNode:
         # Convert to percentage
         self.battery_percentage = (battery_voltage_level - min_voltage) / (max_voltage - min_voltage)
 
-        # rospy.loginfo("Battery voltage level: {}".format(message.battery_voltage_level))
-        # rospy.loginfo("Updated battery percentage: {:.2f}%".format(self.battery_percentage * 100))
+        # self.get_logger().info("Battery voltage level: {}".format(message.battery_voltage_level))
+        # self.get_logger().info("Updated battery percentage: {:.2f}%".format(self.battery_percentage * 100))
 
     def run(self):
         try:
             # display with hardware SPI:
-            #rospy.loginfo("Initializing display...")
+            #self.get_logger().info("Initializing display...")
 
             # Create blank image for drawing.
             image1 = Image.new("RGB", (self.disp.height, self.disp.width), "black")
             draw = ImageDraw.Draw(image1)
 
-            #rospy.loginfo("Importing fonts...")
+            #self.get_logger().info("Importing fonts...")
             Font1 = ImageFont.truetype("/usr/share/fonts/truetype/Font02.ttf", 25)
             Font1_small = ImageFont.truetype("/usr/share/fonts/truetype/Font02.ttf", 20)
             Font1_large = ImageFont.truetype("/usr/share/fonts/truetype/Font02.ttf", 60)
@@ -76,7 +92,7 @@ class DingoDisplayNode:
             ## Battery indication bar
             black= Image.new("RGB", (320, 172), "black")
 
-            batt_status = Image.open(rospack.get_path('dingo_peripheral_interfacing') + "/lib/emptybatterystatus_white.png")
+            batt_status = Image.open(self.battery_icon_path)
 
             # batt_status = batt_status.rotate(180)
             batt_draw = ImageDraw.Draw(batt_status)
@@ -95,21 +111,21 @@ class DingoDisplayNode:
             image1.paste(resized_batt_status,(62, -40),resized_batt_status.convert('RGBA'))
 
 
-            #rospy.loginfo("Drawing...")
+            #self.get_logger().info("Drawing...")
             image1 = image1.rotate(0)
             image1 = image1.transpose(Image.ROTATE_270)
             self.disp.ShowImage(image1)
 
             ## SSID and IP are calcultated after displaying so that they can run on the second loop
-            #rospy.loginfo("Connecting to Wi-Fi...")
+            #self.get_logger().info("Connecting to Wi-Fi...")
             try:
                 self.ssid = os.popen("iwgetid -r").read().strip()
-            except rospy.ROSInterruptException as e:
-                rospy.logerr(str(e))
+            except Exception as e:
+                self.get_logger().error(str(e))
                 self.ssid = "N/A"
 
-            #rospy.loginfo("SSID: " + str(self.ssid))
-            #rospy.loginfo("Getting IP address...")
+            #self.get_logger().info("SSID: " + str(self.ssid))
+            #self.get_logger().info("Getting IP address...")
             try:
                 #s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 #s.connect(('google.com', 0))
@@ -117,27 +133,35 @@ class DingoDisplayNode:
                 #s.close()
                 hostname=socket.gethostname()   
                 self.ipAddress=socket.gethostbyname(hostname) 
-            except rospy.ROSInterruptException as e:
-                rospy.logerr(str(e))
+            except Exception as e:
+                self.get_logger().error(str(e))
                 self.ipAddress = '-:-:-:-'
-            #rospy.loginfo("IP: {self.ipAddress}")
+            #self.get_logger().info("IP: {self.ipAddress}")
 
-        except rospy.ROSInterruptException as e:
-            rospy.logerr(str(e))
+        except Exception as e:
+            self.get_logger().error(str(e))
             
 
-    def loop(self):
-        while not rospy.is_shutdown():
-            self.run()
-            self.rate.sleep()
-        else:
-            rospy.loginfo("Quitting...")
-            self.disp.clear()
-            self.disp.module_exit()
+    def shutdown_display(self):
+        self.get_logger().info("Quitting...")
+        self.disp.clear()
+        self.disp.module_exit()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DingoDisplayNode()
+    node.get_logger().info("Display node started, ouputting to display")
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.shutdown_display()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    node = DingoDisplayNode()
-    rospy.loginfo("Display node started, ouputting to display")
-    node.loop()
-
+    main()

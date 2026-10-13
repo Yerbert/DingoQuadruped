@@ -7,20 +7,20 @@ class LCD_1inch47(lcdconfig.RaspberryPi):
     width = 172
     height = 320 
     def command(self, cmd):
-        self.digital_write(self.DC_PIN, self.GPIO.LOW)
+        self.digital_write(self.DC_PIN, 0)
         self.spi_writebyte([cmd])	
         
     def data(self, val):
-        self.digital_write(self.DC_PIN, self.GPIO.HIGH)
+        self.digital_write(self.DC_PIN, 1)
         self.spi_writebyte([val])	
         
     def reset(self):
         """Reset the display"""
-        self.GPIO.output(self.RST_PIN,self.GPIO.HIGH)
+        self.digital_write(self.RST_PIN,1)
         time.sleep(0.01)
-        self.GPIO.output(self.RST_PIN,self.GPIO.LOW)
+        self.digital_write(self.RST_PIN,0)
         time.sleep(0.01)
-        self.GPIO.output(self.RST_PIN,self.GPIO.HIGH)
+        self.digital_write(self.RST_PIN,1)
         time.sleep(0.01)
         
     def Init(self):
@@ -138,7 +138,7 @@ class LCD_1inch47(lcdconfig.RaspberryPi):
         
         pix = pix.flatten().tolist()
         self.SetWindows ( 0, 0, self.width, self.height)
-        self.digital_write(self.DC_PIN,self.GPIO.HIGH)
+        self.digital_write(self.DC_PIN,1)
         for i in range(0,len(pix),4096):
             self.spi_writebyte(pix[i:i+4096])		
             
@@ -146,7 +146,7 @@ class LCD_1inch47(lcdconfig.RaspberryPi):
         """Clear contents of image buffer"""
         _buffer = [0xff]*(self.width * self.height * 2)
         self.SetWindows ( 0, 0, self.width, self.height)
-        self.digital_write(self.DC_PIN,self.GPIO.HIGH)
+        self.digital_write(self.DC_PIN,1)
         for i in range(0,len(_buffer),4096):
             self.spi_writebyte(_buffer[i:i+4096])	        
         

@@ -1,70 +1,31 @@
-dingo_controller:
-  
-  joint_states_controller:
-      type: joint_state_controller/JointStateController
-      publish_rate: 25
+# ros2_control setup for the simulated Dingo.
+#
+# The ROS 1 version used one effort_controllers/JointPositionController (PID p=9 i=0.03 d=0.3055) per joint, each
+# listening on /dingo_controller/<joint>/command. Here one position controller drives all 12 joints and listens on
+# /joint_group_position_controller/commands (std_msgs/Float64MultiArray, values in radians). The order of `joints`
+# is the order dingo_driver publishes in: FR, FL, RR, RL legs, each theta1, theta2, theta3.
+controller_manager:
+  ros__parameters:
+    update_rate: 100
 
-  # FL Controllers ------------------------------------------------------------ 
-  FL_theta1:
-      type: effort_controllers/JointPositionController
-      joint: FL_theta1
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  FL_theta2:
-      type: effort_controllers/JointPositionController
-      joint: FL_theta2
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  FL_theta3:
-      type: effort_controllers/JointPositionController
-      joint: FL_theta3
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
 
-  # FR Controllers ------------------------------------------------------------ 
-  FR_theta1:
-      type: effort_controllers/JointPositionController
-      joint: FR_theta1
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  FR_theta2:
-      type: effort_controllers/JointPositionController
-      joint: FR_theta2
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  FR_theta3:
-      type: effort_controllers/JointPositionController
-      joint: FR_theta3
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
+    joint_group_position_controller:
+      type: position_controllers/JointGroupPositionController
 
-  # RR Controllers ------------------------------------------------------------ 
-  RR_theta1:
-      type: effort_controllers/JointPositionController
-      joint: RR_theta1
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  RR_theta2:
-      type: effort_controllers/JointPositionController
-      joint: RR_theta2
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  RR_theta3:
-      type: effort_controllers/JointPositionController
-      joint: RR_theta3
-      pid: {p: 9, i: 0, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-
-  # RL Controllers ------------------------------------------------------------     
-  RL_theta1:
-      type: effort_controllers/JointPositionController
-      joint: RL_theta1
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  RL_theta2:
-      type: effort_controllers/JointPositionController
-      joint: RL_theta2
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
-  RL_theta3:
-      type: effort_controllers/JointPositionController
-      joint: RL_theta3
-      pid: {p: 9, i: 0.03, d: 0.3055, i_clamp_min:  -1000, i_clamp_max: 1000}
-        
+joint_group_position_controller:
+  ros__parameters:
+    joints:
+      - FR_theta1
+      - FR_theta2
+      - FR_theta3
+      - FL_theta1
+      - FL_theta2
+      - FL_theta3
+      - RR_theta1
+      - RR_theta2
+      - RR_theta3
+      - RL_theta1
+      - RL_theta2
+      - RL_theta3

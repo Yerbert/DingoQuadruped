@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
-     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     Commit Version 1.6.0-4-g7f85cfe  Build Version 1.6.7995.38578
      For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
 <robot name="dingo" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
@@ -914,179 +914,62 @@
 
 
 
-  <!-- ROS control plugin -->
+  <!-- ros2_control with gazebo_ros2_control, controllers are in dingo_gazebo/config/controllers.yaml.
+       Do not write a colon followed by a space inside any XML comment of this file, because gazebo_ros2_control
+       hands the whole file to controller_manager as a YAML parameter value and that sequence breaks the parsing. -->
   <gazebo>
-    <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
-      <robotNamespace>dingo_controller</robotNamespace>
+    <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
+      <parameters>$(find dingo_gazebo)/config/controllers.yaml</parameters>
     </plugin>
   </gazebo>
 
-
-  <!-- IMU sensor -->
+  <!-- IMU sensor, published on /notspot_imu/base_link_orientation -->
   <gazebo reference="base_link">
     <gravity>true</gravity>
     <sensor name="imu_sensor" type="imu">
       <always_on>true</always_on>
       <update_rate>100</update_rate>
       <visualize>true</visualize>
-      <topic>__default_topic__</topic>
       <plugin filename="libgazebo_ros_imu_sensor.so" name="imu_plugin">
-        <topicName>notspot_imu/base_link_orientation</topicName>
-        <bodyName>imu_link</bodyName>
-        <updateRateHZ>15.0</updateRateHZ>
-        <gaussianNoise>0.0</gaussianNoise>
-        <xyzOffset>0 0 0</xyzOffset>
-        <rpyOffset>0 0 0</rpyOffset>
-        <frameName>base_link</frameName>
-        <initialOrientationAsReference>false</initialOrientationAsReference>
+        <ros>
+          <namespace>/notspot_imu</namespace>
+          <remapping>~/out:=base_link_orientation</remapping>
+        </ros>
+        <frame_name>base_link</frame_name>
+        <initial_orientation_as_reference>false</initial_orientation_as_reference>
       </plugin>
       <pose>0 0 0 0 0 0</pose>
     </sensor>
   </gazebo>
 
-  <!-- Joint state publisher plugin -->
-  <gazebo>
-    <plugin name="joint_state_publisher" filename="libgazebo_ros_joint_state_publisher.so">
-        <robotNamespace>dingo_gazebo</robotNamespace>
-        <jointName>FR_theta1, FR_theta2, FR_theta3, FL_theta1, FL_theta2,
-                   FL_theta3, RR_theta1, RR_theta2, RR_theta3, RL_theta1,
-                   RL_theta2, RL_theta3</jointName>
-        <updateRate>100</updateRate>
-    </plugin>
-  </gazebo>
-
-  <!-- Transmission -->
-  <transmission name="tran1">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FR_theta1">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+  <!-- Hardware interface. Every joint is commanded by position, state is position and velocity.
+       The ROS 1 version commanded efforts through a PID per joint; Gazebo now moves the joints to the
+       commanded position directly. -->
+  <xacro:macro name="position_joint" params="name">
+    <joint name="${name}">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
     </joint>
-    <actuator name="motor1">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
+  </xacro:macro>
 
-  <transmission name="tran2">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FR_theta2">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor2">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran3">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FR_theta3">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor3">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran4">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FL_theta1">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor4">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran5">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FL_theta2">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor5">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran6">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="FL_theta3">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor6">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran7">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RR_theta1">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor7">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran8">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RR_theta2">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor8">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran9">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RR_theta3">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor9">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran10">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RL_theta1">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor10">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran11">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RL_theta2">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor11">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
-
-  <transmission name="tran12">
-    <type>transmission_interface/SimpleTransmission</type>
-    <joint name="RL_theta3">
-      <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    </joint>
-    <actuator name="motor12">
-    <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
-    <mechanicalReduction>5</mechanicalReduction>
-    </actuator>
-  </transmission>
+  <ros2_control name="DingoSystem" type="system">
+    <hardware>
+      <plugin>gazebo_ros2_control/GazeboSystem</plugin>
+    </hardware>
+    <xacro:position_joint name="FR_theta1"/>
+    <xacro:position_joint name="FR_theta2"/>
+    <xacro:position_joint name="FR_theta3"/>
+    <xacro:position_joint name="FL_theta1"/>
+    <xacro:position_joint name="FL_theta2"/>
+    <xacro:position_joint name="FL_theta3"/>
+    <xacro:position_joint name="RR_theta1"/>
+    <xacro:position_joint name="RR_theta2"/>
+    <xacro:position_joint name="RR_theta3"/>
+    <xacro:position_joint name="RL_theta1"/>
+    <xacro:position_joint name="RL_theta2"/>
+    <xacro:position_joint name="RL_theta3"/>
+  </ros2_control>
 
   <!-- FR4 friction -->
   <gazebo reference="FR_link4">
